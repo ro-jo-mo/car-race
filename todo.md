@@ -1,0 +1,11 @@
+# Todo
+- Control camera with mouse ✔
+- Add colliders to level ✔
+- Add rigidbody + collider to player ✔
+- Move player with keyboard ✔
+- Turn player with mouse ✔
+- Jump 
+- Offset camera on player
+- Player movement on slopes
+- Update Blender bevy workflow
+- Third person toggle
