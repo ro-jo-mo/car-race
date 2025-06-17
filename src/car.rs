@@ -183,6 +183,12 @@ fn car_physics(
         let steering_angle = transform.rotation * Quat::from_axis_angle(Vec3::Z, wheel_direction.0);
         transform.rotation = steering_angle;
         let forwards = steering_angle * Vec3::Y;
+// notes:
+// replace turning systemwith angular acceleration and drag
+// this allows 180s etc
+// lower falloff in steering curve
+// transfer portion of velocity to steer direction based on
+// clamp(dot(velocity,steer dir),0,1) * (-tanh(velocity.norm) + 1)
     }
 }
 // https://www.desmos.com/calculator/fbjwusvtxg
