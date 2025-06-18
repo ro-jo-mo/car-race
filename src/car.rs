@@ -15,9 +15,10 @@ const STEER_SPEED: f32 = 1.9;
 const MAX_TURN_ANGLE: f32 = 22.0 * PI / 180.0;
 const TURN_SPEED: f32 = 15.0;
 const ACCELERATION: f32 = 500.0;
-const DRAG: f32 = 2.5;
+const DRAG: f32 = 7.0;
+const ANGULAR_DRAG: f32 = 1.0;
 // Ratio of forward drag to side drag
-const DRAG_RATIO: f32 = 0.2;
+const DRAG_RATIO: f32 = 0.1;
 
 pub struct CarPlugin;
 impl Plugin for CarPlugin {
@@ -149,7 +150,7 @@ fn car_physics(
         // high speeds should also lower this ratio
         let acceleration = Vec2::Y * time.delta_secs() * ACCELERATION * input.input.y;
         let acceleration = transform.rotation * Vec3::new(acceleration.x, acceleration.y, 0.0);
-        let acceleration = Vec2::new(acceleration.x, acceleration.y);
+        let acceleration = acceleration.truncate();
         linear_velocity.0 += acceleration;
 
         // Apply drag
@@ -167,6 +168,7 @@ fn car_physics(
 
         // save velocity.y
         let forwards_magnitude = velocity.y;
+        let side_magnitude = velocity.x.abs();
 
         velocity = transform.rotation * velocity;
         linear_velocity.0 = Vec2::new(velocity.x, velocity.y);
@@ -175,23 +177,52 @@ fn car_physics(
         // 1. Get the amount of velocity in vehicle direction
         // 2. magnitude * steering_curve(velocity.magnitude) * TURN_SPEED = car rotation
         // Steering curve goes from 1.0 to 0.0
-        // Can't lose grip
-        // Rotates when not turning
-        angular_velocity.0 = steering_curve(forwards_magnitude) * wheel_direction.0;
+        angular_velocity.0 +=
+            steering_curve(forwards_magnitude) * wheel_direction.0 * time.delta_secs();
+
+        // Angular drag
+        // Always have some opposition to turning
+        // Very high when at a stand still
+        // Past some speed threshold, the drag is fairly constant
+        // -tanh ?
+        angular_velocity.0 -= angular_velocity.0.signum()
+            * (steering_curve(side_magnitude) + 1.0)
+            * time.delta_secs();
 
         // Transfer some velocity to the steering direction
         let steering_angle = transform.rotation * Quat::from_axis_angle(Vec3::Z, wheel_direction.0);
-        transform.rotation = steering_angle;
-        let forwards = steering_angle * Vec3::Y;
-// notes:
-// replace turning systemwith angular acceleration and drag
-// this allows 180s etc
-// lower falloff in steering curve
-// transfer portion of velocity to steer direction based on
-// clamp(dot(velocity,steer dir),0,1) * (-tanh(velocity.norm) + 1)
+
+        let forwards = (steering_angle * Vec3::Y).truncate();
+        // notes:
+        // replace turning systemwith angular acceleration and drag
+        // this allows 180s etc
+        // lower falloff in steering curve
+        // transfer portion of velocity to steer direction based on
+        // might want to clamp dot if doing a 180 results in weird behaviour
+        // dot(velocity,steer dir) * (-tanh(velocity.norm) + 1)
+
+        let velocity_magnitude = linear_velocity.0.norm();
+        if velocity_magnitude == 0.0 {
+            continue;
+        }
+
+        let conversion_ratio = forwards.dot(linear_velocity.0 / velocity_magnitude)
+            * transfer_curve(velocity_magnitude)
+            * time.delta_secs();
+
+        let transferred = velocity_magnitude * conversion_ratio;
+        let untransferred = 1.0 - conversion_ratio;
+
+        let transferred_velocity = forwards * transferred;
+        let untransferred_velocity = linear_velocity.0 * untransferred;
+        linear_velocity.0 = transferred_velocity + untransferred_velocity;
     }
 }
 // https://www.desmos.com/calculator/fbjwusvtxg
 fn steering_curve(x: f32) -> f32 {
-    (-tanh(x * 0.003) + 1.0) * tanh(x * 0.002) * TURN_SPEED
+    tanh(x * 0.001) * TURN_SPEED
+}
+
+fn transfer_curve(x: f32) -> f32 {
+    -tanh(x * 0.008) + 1.0
 }
