@@ -13,17 +13,27 @@ use crate::player::Player;
 
 const STEER_SPEED: f32 = 1.9;
 const MAX_TURN_ANGLE: f32 = 22.0 * PI / 180.0;
-const TURN_SPEED: f32 = 15.0;
+const TURN_RADIUS_COEFFICIENT: f32 = 20.0;
+const TURN_SPEED: f32 = 700.0;
+const TURN_ACCELERATION: f32 = 40.0;
+const BASE_TURN_RADIUS: f32 = 30.0;
 const ACCELERATION: f32 = 500.0;
-const DRAG: f32 = 7.0;
-const ANGULAR_DRAG: f32 = 1.0;
-// Ratio of forward drag to side drag
-const DRAG_RATIO: f32 = 0.1;
+const FORWARDS_DRAG: f32 = 1.0;
+const SIDE_DRAG: f32 = 4.0;
 
 pub struct CarPlugin;
 impl Plugin for CarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (turn_wheels, car_physics).chain());
+        app.add_systems(
+            FixedUpdate,
+            (
+                turn_wheels,
+                car_acceleration,
+                car_turning,
+                transfer_velocity_to_wheel_direction,
+            )
+                .chain(),
+        );
     }
 }
 
@@ -49,7 +59,7 @@ pub fn spawn_car(position: Vec2) -> impl Bundle {
     const WHEEL_SIZE: Vec2 = Vec2::new(8.0, 16.0);
     let offset = Vec2::new(-4.0 + WHEEL_SIZE.x / 2.0, 5.0 + WHEEL_SIZE.y / 2.0);
     let wheel_pos = Vec2::new(SIZE.x / 2.0, SIZE.y / 2.0) - offset;
-    let com = Vec2::new(0.0, (SIZE.y / 2.0) * 0.5);
+    let com = Vec2::new(0.0, (SIZE.y / 6.0) * 0.5);
 
     (
         Car,
@@ -93,6 +103,7 @@ fn turn_wheels(
 ) {
     for (input, mut direction, children, is_player) in cars.iter_mut() {
         direction.0 += input.input.x * STEER_SPEED * time.delta_secs();
+        direction.0 = direction.0.clamp(-MAX_TURN_ANGLE, MAX_TURN_ANGLE);
         if is_player != Option::None {
             if input.input.x == 0.0 {
                 // Auto centre
@@ -104,7 +115,6 @@ fn turn_wheels(
                 }
             }
         }
-        direction.0 = direction.0.clamp(-MAX_TURN_ANGLE, MAX_TURN_ANGLE);
         for child in children {
             if let Ok((mut transform, wheel)) = wheels.get_mut(*child) {
                 match wheel {
@@ -121,12 +131,39 @@ fn turn_wheels(
     }
 }
 
-fn car_physics(
+fn car_acceleration(
+    mut query: Query<(&CarInput, &Transform, &mut LinearVelocity), With<Car>>,
+    time: Res<Time>,
+) {
+    for (input, transform, mut linear_velocity) in query.iter_mut() {
+        let forwards = (transform.rotation * Vec3::Y).truncate();
+
+        let acceleration = forwards * time.delta_secs() * ACCELERATION * input.input.y;
+
+        linear_velocity.0 += acceleration;
+
+        // Apply drag to the vehicle
+        // More drag is applied to side directions
+        let velocity = linear_velocity.0;
+        let mut velocity = Vec3::new(velocity.x, velocity.y, 0.0);
+        velocity = transform.rotation.inverse() * velocity;
+
+        let mut drag = Vec3::ZERO;
+        drag.x = velocity.x * SIDE_DRAG;
+        drag.y = velocity.y * FORWARDS_DRAG;
+        drag *= time.delta_secs();
+        velocity -= drag;
+
+        velocity = transform.rotation * velocity;
+        linear_velocity.0 = Vec2::new(velocity.x, velocity.y);
+    }
+}
+
+fn car_turning(
     mut query: Query<
         (
-            &CarInput,
-            &mut Transform,
-            &mut LinearVelocity,
+            &Transform,
+            &LinearVelocity,
             &mut AngularVelocity,
             &WheelDirection,
         ),
@@ -137,75 +174,64 @@ fn car_physics(
     // Rotate using physics
     // Apply more drag based on car direction
 
-    for (input, mut transform, mut linear_velocity, mut angular_velocity, wheel_direction) in
-        query.iter_mut()
-    {
-        // let the speed of rotation be bounded by +- max_angle
-        // can't use a hard limit, i.e. in the case of collisions, the vehicle will face external forces that may go past these limits
-        // Steering auto returns to centre
+    for (transform, linear_velocity, mut angular_velocity, wheel_direction) in query.iter_mut() {
+        let forwards_magnitude = (calculate_steering_angle(*transform, wheel_direction).inverse()
+            * Vec3::new(linear_velocity.0.x, linear_velocity.0.y, 0.0))
+        .y;
 
-        // could do simple grip simulation
-        // transfer some velocity to the tyre direction
-        // lower the ratio of transfered velocity as the angle between desired direction, and actual velocity increases
-        // high speeds should also lower this ratio
-        let acceleration = Vec2::Y * time.delta_secs() * ACCELERATION * input.input.y;
-        let acceleration = transform.rotation * Vec3::new(acceleration.x, acceleration.y, 0.0);
-        let acceleration = acceleration.truncate();
-        linear_velocity.0 += acceleration;
+        // Turn radius = (1 - steering angle) * forwards velocity / delta time
+        // When the wheel is not turned, the forces on the front and rear wheels are equal, and we don't turn
+        let turn_radius = BASE_TURN_RADIUS
+            + TURN_RADIUS_COEFFICIENT * forwards_magnitude
+                / wheel_direction.0.abs()
+                / time.delta_secs();
+        let distance_covered = forwards_magnitude * time.delta_secs();
+        // NOTE Given this turning angle, attempt to push the angular velocity to it
 
-        // Apply drag
-        // More drag to side directions
-        let velocity = linear_velocity.0;
-        let mut velocity = Vec3::new(velocity.x, velocity.y, 0.0);
-        // Rotate velocity so the x and y axis correspond to the forward and right vectors relative to the vehicle rotation
-        velocity = transform.rotation.inverse() * velocity;
-        let mut drag = Vec3::ZERO;
-        drag.x = velocity.x;
-        drag.y = velocity.y * DRAG_RATIO;
-        drag *= time.delta_secs() * DRAG;
-        // Rotate back to world space
-        velocity -= drag;
+        let mut desired_angle = (PI - 2.0 * f32::atan(turn_radius / distance_covered))
+            * wheel_direction.0.signum()
+            * forwards_magnitude
+            * TURN_SPEED;
+        if f32::is_nan(desired_angle) {
+            desired_angle = 0.0;
+        }
+        // Push angular velocity towards this value
+        let difference = desired_angle - angular_velocity.0;
+        let direction = difference.signum();
 
-        // save velocity.y
-        let forwards_magnitude = velocity.y;
-        let side_magnitude = velocity.x.abs();
+        let mut acceleration = direction * TURN_ACCELERATION * time.delta_secs();
+        if acceleration.abs() > difference.abs() {
+            acceleration = difference;
+        }
 
-        velocity = transform.rotation * velocity;
-        linear_velocity.0 = Vec2::new(velocity.x, velocity.y);
+        angular_velocity.0 += acceleration;
+    }
+}
 
-        // Turning:
-        // 1. Get the amount of velocity in vehicle direction
-        // 2. magnitude * steering_curve(velocity.magnitude) * TURN_SPEED = car rotation
-        // Steering curve goes from 1.0 to 0.0
-        angular_velocity.0 +=
-            steering_curve(forwards_magnitude) * wheel_direction.0 * time.delta_secs();
+fn calculate_steering_angle(transform: Transform, wheel_direction: &WheelDirection) -> Quat {
+    transform.rotation * Quat::from_axis_angle(Vec3::Z, wheel_direction.0)
+}
 
-        // Angular drag
-        // Always have some opposition to turning
-        // Very high when at a stand still
-        // Past some speed threshold, the drag is fairly constant
-        // -tanh ?
-        angular_velocity.0 -= angular_velocity.0.signum()
-            * (steering_curve(side_magnitude) + 1.0)
-            * time.delta_secs();
+fn calculate_steering_direction(
+    transform: Transform,
+    wheel_direction: &WheelDirection,
+    direction: Vec3,
+) -> Vec2 {
+    let steering_angle = calculate_steering_angle(transform, wheel_direction);
+    (steering_angle * direction).truncate()
+}
 
-        // Transfer some velocity to the steering direction
-        let steering_angle = transform.rotation * Quat::from_axis_angle(Vec3::Z, wheel_direction.0);
-
-        let forwards = (steering_angle * Vec3::Y).truncate();
-        // notes:
-        // replace turning systemwith angular acceleration and drag
-        // this allows 180s etc
-        // lower falloff in steering curve
-        // transfer portion of velocity to steer direction based on
-        // might want to clamp dot if doing a 180 results in weird behaviour
-        // dot(velocity,steer dir) * (-tanh(velocity.norm) + 1)
-
+fn transfer_velocity_to_wheel_direction(
+    mut query: Query<(&Transform, &mut LinearVelocity, &WheelDirection), With<Car>>,
+    time: Res<Time>,
+) {
+    for (transform, mut linear_velocity, wheel_direction) in query.iter_mut() {
+        let forwards = calculate_steering_direction(*transform, wheel_direction, Vec3::Y);
         let velocity_magnitude = linear_velocity.0.norm();
         if velocity_magnitude == 0.0 {
             continue;
         }
-
+        // Transfer some velocity to the steering direction
         let conversion_ratio = forwards.dot(linear_velocity.0 / velocity_magnitude)
             * transfer_curve(velocity_magnitude)
             * time.delta_secs();
@@ -218,11 +244,6 @@ fn car_physics(
         linear_velocity.0 = transferred_velocity + untransferred_velocity;
     }
 }
-// https://www.desmos.com/calculator/fbjwusvtxg
-fn steering_curve(x: f32) -> f32 {
-    tanh(x * 0.001) * TURN_SPEED
-}
-
 fn transfer_curve(x: f32) -> f32 {
-    -tanh(x * 0.008) + 1.0
+    -tanh(x * 0.015) + 1.0
 }

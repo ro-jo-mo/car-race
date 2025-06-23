@@ -13,7 +13,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                mode: bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current),
+                mode: bevy::window::WindowMode::Windowed,
                 ..default()
             }),
             ..default()
