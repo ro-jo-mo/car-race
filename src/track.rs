@@ -35,7 +35,7 @@ fn create_track(mut commands: Commands) {
         &points[..],
         basis_vector,
         Quat::from_rotation_z(PI / 2.0) * (basis_vector - centre),
-        track_points,
+        &track_points,
     );
 
     for i in 0..POINTS {
@@ -112,7 +112,7 @@ fn find_next_point(
     points: &[Vec3],
     current_point: Vec3,
     current_direction: Vec3,
-    mut total: Vec<Vec3>,
+    mut total: &Vec<Vec3>,
 ) {
     // Just take the first point to match our requirements ?
     // Ratio of angle to distance
