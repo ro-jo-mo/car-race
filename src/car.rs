@@ -4,7 +4,7 @@ use avian2d::prelude::*;
 use bevy::{
     math::{
         NormedVectorSpace, VectorSpace,
-        ops::{acos, tanh},
+        ops::{acos, log2, tanh},
     },
     prelude::*,
 };
@@ -14,12 +14,12 @@ use crate::player::Player;
 const STEER_SPEED: f32 = 1.9;
 const MAX_TURN_ANGLE: f32 = 22.0 * PI / 180.0;
 const TURN_RADIUS_COEFFICIENT: f32 = 20.0;
-const TURN_SPEED: f32 = 700.0;
-const TURN_ACCELERATION: f32 = 40.0;
+const TURN_SPEED: f32 = 25000.0;
+const TURN_ACCELERATION: f32 = 1000.0;
 const BASE_TURN_RADIUS: f32 = 30.0;
-const ACCELERATION: f32 = 500.0;
-const FORWARDS_DRAG: f32 = 1.0;
-const SIDE_DRAG: f32 = 4.0;
+const ACCELERATION: f32 = 700.0;
+const FORWARDS_DRAG: f32 = 1.5;
+const SIDE_DRAG: f32 = 8.0;
 
 pub struct CarPlugin;
 impl Plugin for CarPlugin {
@@ -190,8 +190,10 @@ fn car_turning(
 
         let mut desired_angle = (PI - 2.0 * f32::atan(turn_radius / distance_covered))
             * wheel_direction.0.signum()
-            * forwards_magnitude
+            * steering_curve(forwards_magnitude.abs())
+            * forwards_magnitude.signum()
             * TURN_SPEED;
+
         if f32::is_nan(desired_angle) {
             desired_angle = 0.0;
         }
@@ -246,4 +248,7 @@ fn transfer_velocity_to_wheel_direction(
 }
 fn transfer_curve(x: f32) -> f32 {
     -tanh(x * 0.015) + 1.0
+}
+fn steering_curve(x: f32) -> f32 {
+    log2(0.3 * x + 1.0)
 }
