@@ -6,7 +6,7 @@ use bevy::{
 
 const POINTS: usize = 100;
 const RANGE: f32 = 1000.0;
-const THRESHOLD: f32 = 0.2;
+const THRESHOLD: f32 = 0.00001;
 pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
@@ -35,7 +35,7 @@ fn create_track(mut commands: Commands) {
         &points[..],
         basis_vector,
         Quat::from_rotation_z(PI / 2.0) * (basis_vector - centre),
-        &track_points,
+        &mut track_points,
     );
 
     for i in 0..POINTS {
@@ -63,7 +63,7 @@ fn create_track(mut commands: Commands) {
 
     commands.spawn((
         Transform::from_xyz(centre.x, centre.y, centre.z),
-        Sprite::from_color(Color::hsv(180.0, 1.0, 1.0), Vec2::ONE * 10.0),
+        Sprite::from_color(Color::hsv(90.0, 1.0, 1.0), Vec2::ONE * 10.0),
     ));
 }
 
@@ -112,7 +112,7 @@ fn find_next_point(
     points: &[Vec3],
     current_point: Vec3,
     current_direction: Vec3,
-    mut total: &Vec<Vec3>,
+    total: &mut Vec<Vec3>,
 ) {
     // Just take the first point to match our requirements ?
     // Ratio of angle to distance
@@ -121,12 +121,13 @@ fn find_next_point(
         let distance = current_point.distance_squared(point);
         let direction = point - current_point;
         let angle = current_direction.angle_between(direction);
+        println!("{}", angle / distance);
         if angle / distance < THRESHOLD {
             total.push(point);
             if i == points.len() - 1 {
                 break;
             }
-            find_next_points(&points[i + 1..], point, direction, total);
+            find_next_point(&points[i + 1..], point, direction, total);
             break;
         }
     }
