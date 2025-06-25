@@ -1,21 +1,25 @@
 use avian2d::{math::PI, prelude::*};
-use bevy::{
-    math::{VectorSpace, ops::atan2},
-    prelude::*,
-};
+use bevy::{math::ops::atan2, prelude::*};
 
-const POINTS: usize = 100;
+const POINTS: usize = 50;
 const RANGE: f32 = 1000.0;
-const THRESHOLD: f32 = 0.00001;
+const THRESHOLD: f32 = 0.002;
+const MIN_DISTANCE: f32 = 100.0;
+const RATIO_OFFSET: f32 = 500.0;
+const COLLIDER_STEPS: usize = 15;
 pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, create_track);
+        app.add_systems(Startup, generate_track)
+            .add_systems(Update, draw_track);
     }
 }
 
-fn create_track(mut commands: Commands) {
+#[derive(Component)]
+struct Curve(CubicCurve<Vec3>);
+
+fn generate_track(mut commands: Commands) {
     // Maybe just generate a group of random points
     // Then attempt to create a minimum area lasso around them
     // Generate points with some minimum distance between them, so the track cant overlap
@@ -31,12 +35,17 @@ fn create_track(mut commands: Commands) {
     sort_points_by_angle(&mut points, basis_index);
 
     let mut track_points = Vec::<Vec3>::new();
+
+    // Convert to iterative method, try to find n points for the track
+    // Progressively increase the threshold
     find_next_point(
         &points[..],
         basis_vector,
         Quat::from_rotation_z(PI / 2.0) * (basis_vector - centre),
         &mut track_points,
     );
+
+    track_points.push(basis_vector);
 
     for i in 0..POINTS {
         let point = points[i];
@@ -65,6 +74,10 @@ fn create_track(mut commands: Commands) {
         Transform::from_xyz(centre.x, centre.y, centre.z),
         Sprite::from_color(Color::hsv(90.0, 1.0, 1.0), Vec2::ONE * 10.0),
     ));
+
+    let curve = create_curve(track_points);
+    let track_collider = create_track_collider(&curve);
+    commands.spawn((curve, track_collider, RigidBody::Static));
 }
 
 fn generate_points() -> Vec<Vec3> {
@@ -116,13 +129,20 @@ fn find_next_point(
 ) {
     // Just take the first point to match our requirements ?
     // Ratio of angle to distance
+
     for i in 0..points.len() {
         let point = points[i];
-        let distance = current_point.distance_squared(point);
+        let distance = current_point.distance(point);
+
+        if distance < MIN_DISTANCE {
+            continue;
+        }
+
         let direction = point - current_point;
         let angle = current_direction.angle_between(direction);
-        println!("{}", angle / distance);
-        if angle / distance < THRESHOLD {
+        let ratio = angle / (distance + RATIO_OFFSET);
+
+        if ratio < THRESHOLD {
             total.push(point);
             if i == points.len() - 1 {
                 break;
@@ -131,4 +151,26 @@ fn find_next_point(
             break;
         }
     }
+}
+
+fn draw_track(query: Query<&Curve>, mut gizmos: Gizmos) {
+    for Curve(curve) in query.iter() {
+        let resolution = 100 * curve.segments().len();
+        gizmos.linestrip(curve.iter_positions(resolution), Color::srgb(1.0, 1.0, 1.0));
+    }
+}
+
+fn create_curve(points: Vec<Vec3>) -> Curve {
+    let spline = CubicCardinalSpline::new_catmull_rom(points);
+    let curve = spline.to_curve_cyclic().unwrap();
+    Curve(curve)
+}
+
+fn create_track_collider(curve: &Curve) -> Collider {
+    let curve = &curve.0;
+    let points = curve
+        .iter_positions(COLLIDER_STEPS * curve.segments().len())
+        .map(|v| v.truncate())
+        .collect();
+    Collider::polyline(points, Option::None)
 }
