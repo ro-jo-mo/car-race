@@ -2,8 +2,12 @@ use avian2d::prelude::*;
 use bevy::prelude::*;
 use pause::PausePlugin;
 
-use crate::{car::CarPlugin, player::PlayerPlugin, test::TestPlugin, track::TrackPlugin};
+use crate::{
+    camera::CameraPlugin, car::CarPlugin, player::PlayerPlugin, test::TestPlugin,
+    track::TrackPlugin,
+};
 
+mod camera;
 mod car;
 mod pause;
 mod player;
@@ -26,6 +30,7 @@ fn main() {
         .add_plugins(PlayerPlugin)
         .add_plugins(TrackPlugin)
         .add_plugins(PhysicsDebugPlugin::default())
+        .add_plugins(CameraPlugin)
         //.add_plugins(TestPlugin)
         .run();
 }

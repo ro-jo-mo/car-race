@@ -1,12 +1,17 @@
+use std::iter::zip;
+
 use avian2d::{math::PI, prelude::*};
 use bevy::{math::ops::atan2, prelude::*};
 
 const POINTS: usize = 50;
 const RANGE: f32 = 1000.0;
-const THRESHOLD: f32 = 0.002;
+const THRESHOLD: f32 = 0.003;
 const MIN_DISTANCE: f32 = 100.0;
 const RATIO_OFFSET: f32 = 500.0;
-const COLLIDER_STEPS: usize = 15;
+const COLLIDER_STEPS: usize = 100;
+const TRACK_WIDTH: f32 = 300.0;
+const LENIENCY: f32 = 0.5;
+const SCALE: f32 = 4.0;
 pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
@@ -47,37 +52,27 @@ fn generate_track(mut commands: Commands) {
 
     track_points.push(basis_vector);
 
-    for i in 0..POINTS {
-        let point = points[i];
-        let colour = Color::hsv(0.0, 0.0, i as f32 / POINTS as f32);
-        if i == 0 {
-            commands.spawn((
-                Transform::from_xyz(point.x, point.y, point.z),
-                Sprite::from_color(Color::hsv(0.0, 1.0, 1.0), Vec2::ONE * 10.0),
-            ));
-        } else {
-            commands.spawn((
-                Transform::from_xyz(point.x, point.y, point.z),
-                Sprite::from_color(colour, Vec2::ONE * 10.0),
-            ));
-        }
-    }
+    // points_debug(points, track_points, centre, commands);
 
-    for point in track_points.iter() {
-        commands.spawn((
-            Transform::from_xyz(point.x, point.y, 1.0),
-            Sprite::from_color(Color::hsv(0.0, 1.0, 1.0), Vec2::ONE * 10.0),
-        ));
-    }
+    let track_points = rescale_points(track_points);
+    let left_curve = create_track_curve(track_points);
+    let left_track_collider = create_track_collider(&left_curve);
+
+    let right_curve = create_track_curve(create_other_track_half(&left_curve));
+    let right_track_collider = create_track_collider(&right_curve);
 
     commands.spawn((
-        Transform::from_xyz(centre.x, centre.y, centre.z),
-        Sprite::from_color(Color::hsv(90.0, 1.0, 1.0), Vec2::ONE * 10.0),
+        left_curve,
+        left_track_collider,
+        RigidBody::Static,
+        Restitution::new(0.5),
     ));
-
-    let curve = create_curve(track_points);
-    let track_collider = create_track_collider(&curve);
-    commands.spawn((curve, track_collider, RigidBody::Static));
+    commands.spawn((
+        right_curve,
+        right_track_collider,
+        RigidBody::Static,
+        Restitution::new(0.5),
+    ));
 }
 
 fn generate_points() -> Vec<Vec3> {
@@ -92,6 +87,10 @@ fn generate_points() -> Vec<Vec3> {
 
 fn calculate_centre(points: &Vec<Vec3>) -> Vec3 {
     points.iter().sum::<Vec3>() / POINTS as f32
+}
+
+fn rescale_points(points: Vec<Vec3>) -> Vec<Vec3> {
+    points.iter().map(|x| x * SCALE).collect()
 }
 
 fn get_basis_index(points: &Vec<Vec3>, centre: Vec3) -> usize {
@@ -160,7 +159,7 @@ fn draw_track(query: Query<&Curve>, mut gizmos: Gizmos) {
     }
 }
 
-fn create_curve(points: Vec<Vec3>) -> Curve {
+fn create_track_curve(points: Vec<Vec3>) -> Curve {
     let spline = CubicCardinalSpline::new_catmull_rom(points);
     let curve = spline.to_curve_cyclic().unwrap();
     Curve(curve)
@@ -173,4 +172,61 @@ fn create_track_collider(curve: &Curve) -> Collider {
         .map(|v| v.truncate())
         .collect();
     Collider::polyline(points, Option::None)
+}
+
+fn create_other_track_half(curve: &Curve) -> Vec<Vec3> {
+    let curve = &curve.0;
+
+    let len = curve.segments().len() * COLLIDER_STEPS;
+
+    let mut points = Vec::<Vec3>::with_capacity(len);
+
+    let rotation = Quat::from_rotation_z(-PI / 2.0);
+    for (point, forwards) in zip(curve.iter_positions(len), curve.iter_velocities(len)) {
+        let perpendicular = (rotation * forwards).normalize() * TRACK_WIDTH;
+        let new_point = point + perpendicular;
+        points.push(new_point);
+    }
+
+    let square_width = TRACK_WIDTH * TRACK_WIDTH - LENIENCY;
+
+    for i in (0..len).rev() {
+        let new_point = points[i];
+        for point in curve.iter_positions(len) {
+            if point.distance_squared(new_point) < square_width {
+                points.remove(i);
+                break;
+            }
+        }
+    }
+    points
+}
+
+fn points_debug(points: Vec<Vec3>, track_points: Vec<Vec3>, centre: Vec3, mut commands: Commands) {
+    for i in 0..POINTS {
+        let point = points[i];
+        let colour = Color::hsv(0.0, 0.0, i as f32 / POINTS as f32);
+        if i == 0 {
+            commands.spawn((
+                Transform::from_xyz(point.x, point.y, point.z),
+                Sprite::from_color(Color::hsv(0.0, 1.0, 1.0), Vec2::ONE * 10.0),
+            ));
+        } else {
+            commands.spawn((
+                Transform::from_xyz(point.x, point.y, point.z),
+                Sprite::from_color(colour, Vec2::ONE * 10.0),
+            ));
+        }
+    }
+
+    for point in track_points.iter() {
+        commands.spawn((
+            Transform::from_xyz(point.x, point.y, 1.0),
+            Sprite::from_color(Color::hsv(0.0, 1.0, 1.0), Vec2::ONE * 10.0),
+        ));
+    }
+    commands.spawn((
+        Transform::from_xyz(centre.x, centre.y, centre.z),
+        Sprite::from_color(Color::hsv(90.0, 1.0, 1.0), Vec2::ONE * 10.0),
+    ));
 }

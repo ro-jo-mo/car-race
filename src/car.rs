@@ -17,8 +17,8 @@ const TURN_RADIUS_COEFFICIENT: f32 = 20.0;
 const TURN_SPEED: f32 = 25000.0;
 const TURN_ACCELERATION: f32 = 1000.0;
 const BASE_TURN_RADIUS: f32 = 30.0;
-const ACCELERATION: f32 = 700.0;
-const FORWARDS_DRAG: f32 = 1.5;
+const ACCELERATION: f32 = 400.0;
+const FORWARDS_DRAG: f32 = 1.0;
 const SIDE_DRAG: f32 = 8.0;
 
 pub struct CarPlugin;
@@ -68,6 +68,7 @@ pub fn spawn_car(position: Vec2) -> impl Bundle {
         Collider::rectangle(SIZE.x, SIZE.y),
         Sprite::from_color(Color::hsl(rand::random::<f32>() * 360.0, 0.5, 0.8), SIZE),
         RigidBody::Dynamic,
+        Restitution::new(0.5),
         GravityScale(0.0),
         CenterOfMass::new(com.x, com.y),
         Transform::from_xyz(position.x, position.y, 0.0),
